@@ -101,12 +101,15 @@ namespace SandHook {
 
         void MayInitLinearMap() const;
 
+        void decode_debug_header(ElfW(Ehdr) *data, ElfW(Off) offset, size_t total);
+
         std::string elf;
         void *base = nullptr;
         char *buffer = nullptr;
         off_t size = 0;
         off_t bias = -4396;
         ElfW(Ehdr) *header = nullptr;
+        ElfW(Ehdr) *debug_header = nullptr;
         ElfW(Shdr) *section_header = nullptr;
         ElfW(Shdr) *symtab = nullptr;
         ElfW(Shdr) *strtab = nullptr;
@@ -114,6 +117,7 @@ namespace SandHook {
         ElfW(Sym) *symtab_start = nullptr;
         ElfW(Sym) *dynsym_start = nullptr;
         ElfW(Sym) *strtab_start = nullptr;
+        ElfW(Sym) *strtab_strings = nullptr;
         ElfW(Off) symtab_count = 0;
         ElfW(Off) symstr_offset = 0;
         ElfW(Off) symstr_offset_for_symtab = 0;

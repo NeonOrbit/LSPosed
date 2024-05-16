@@ -26,6 +26,8 @@
 #include <sys/stat.h>
 #include "logging.h"
 #include "elf_util.h"
+#include "xzlib/xz_config.h"
+#include "xzlib/xz.h"
 
 using namespace SandHook;
 
@@ -62,7 +64,19 @@ ElfImg::ElfImg(std::string_view base_name) : elf(base_name) {
     auto shoff = reinterpret_cast<uintptr_t>(section_header);
     char *section_str = offsetOf<char *>(header, section_header[header->e_shstrndx].sh_offset);
 
-    for (int i = 0; i < header->e_shnum; i++, shoff += header->e_shentsize) {
+    ElfW(Ehdr) *elf_header = header;
+    for (int i = 0; ; i++, shoff += elf_header->e_shentsize) {
+        if (i >= elf_header->e_shnum) {
+            if (debug_header == nullptr || section_header == nullptr) break;
+            else {
+                i = 0;
+                elf_header = debug_header;
+                section_header = offsetOf<decltype(section_header)>(elf_header, elf_header->e_shoff);
+                shoff = reinterpret_cast<uintptr_t>(section_header);
+                section_str = offsetOf<char *>(elf_header, section_header[elf_header->e_shstrndx].sh_offset);
+                section_header = nullptr;
+            }
+        }
         auto *section_h = (ElfW(Shdr) *) shoff;
         char *sname = section_h->sh_name + section_str;
         auto entsize = section_h->sh_entsize;
@@ -71,7 +85,7 @@ ElfImg::ElfImg(std::string_view base_name) : elf(base_name) {
                 if (bias == -4396) {
                     dynsym = section_h;
                     dynsym_offset = section_h->sh_offset;
-                    dynsym_start = offsetOf<decltype(dynsym_start)>(header, dynsym_offset);
+                    dynsym_start = offsetOf<decltype(dynsym_start)>(elf_header, dynsym_offset);
                 }
                 break;
             }
@@ -81,7 +95,7 @@ ElfImg::ElfImg(std::string_view base_name) : elf(base_name) {
                     symtab_offset = section_h->sh_offset;
                     symtab_size = section_h->sh_size;
                     symtab_count = symtab_size / entsize;
-                    symtab_start = offsetOf<decltype(symtab_start)>(header, symtab_offset);
+                    symtab_start = offsetOf<decltype(symtab_start)>(elf_header, symtab_offset);
                 }
                 break;
             }
@@ -89,14 +103,18 @@ ElfImg::ElfImg(std::string_view base_name) : elf(base_name) {
                 if (bias == -4396) {
                     strtab = section_h;
                     symstr_offset = section_h->sh_offset;
-                    strtab_start = offsetOf<decltype(strtab_start)>(header, symstr_offset);
+                    strtab_start = offsetOf<decltype(strtab_start)>(elf_header, symstr_offset);
                 }
                 if (strcmp(sname, ".strtab") == 0) {
                     symstr_offset_for_symtab = section_h->sh_offset;
+                    strtab_strings = offsetOf<decltype(strtab_strings)>(elf_header, symstr_offset_for_symtab);
                 }
                 break;
             }
             case SHT_PROGBITS: {
+                if (strcmp(sname, ".gnu_debugdata") == 0) {
+                    decode_debug_header(elf_header, section_h->sh_offset, section_h->sh_size);
+                }
                 if (strtab == nullptr || dynsym == nullptr) break;
                 if (bias == -4396) {
                     bias = (off_t) section_h->sh_addr - (off_t) section_h->sh_offset;
@@ -104,14 +122,14 @@ ElfImg::ElfImg(std::string_view base_name) : elf(base_name) {
                 break;
             }
             case SHT_HASH: {
-                auto *d_un = offsetOf<ElfW(Word)>(header, section_h->sh_offset);
+                auto *d_un = offsetOf<ElfW(Word)>(elf_header, section_h->sh_offset);
                 nbucket_ = d_un[0];
                 bucket_ = d_un + 2;
                 chain_ = bucket_ + nbucket_;
                 break;
             }
             case SHT_GNU_HASH: {
-                auto *d_buf = reinterpret_cast<ElfW(Word) *>(((size_t) header) +
+                auto *d_buf = reinterpret_cast<ElfW(Word) *>(((size_t) elf_header) +
                                                              section_h->sh_offset);
                 gnu_nbucket_ = d_buf[0];
                 gnu_symndx_ = d_buf[1];
@@ -124,6 +142,70 @@ ElfImg::ElfImg(std::string_view base_name) : elf(base_name) {
                 break;
             }
         }
+    }
+}
+
+void ElfImg::decode_debug_header(ElfW(Ehdr) *data, ElfW(Off) offset, size_t total) {
+    xz_crc32_init();
+    xz_crc64_init();
+
+    enum xz_ret xz_return;
+    struct xz_buf xz_buffer;
+    struct xz_dec *xz_state;
+
+    uint8_t * output_buffer;
+    size_t decompressed_size;
+    size_t buff_size = 1 << 20;
+
+    if ((xz_state = xz_dec_init(XZ_DYNALLOC, 1 << 26)) == NULL) {
+        LOGE("xz-dec: xz_dec_init failed");
+        return;
+    }
+    if ((output_buffer = (uint8_t *) malloc(buff_size)) == NULL) {
+        LOGE("xz-dec: memory allocation failed");
+        return;
+    }
+
+    xz_buffer.in = ((uint8_t *) data) + offset;
+    xz_buffer.in_pos = 0;
+    xz_buffer.in_size = total;
+    xz_buffer.out = output_buffer;
+    xz_buffer.out_pos = 0;
+    xz_buffer.out_size = buff_size;
+
+    while (true) {
+        xz_return = xz_dec_run(xz_state, &xz_buffer);
+        if (xz_return == XZ_UNSUPPORTED_CHECK) {
+            continue;
+        }
+        decompressed_size = xz_buffer.out_pos;
+        if (xz_return == XZ_OK) {
+            size_t resize = decompressed_size + buff_size;
+            output_buffer = (uint8_t *) realloc(output_buffer, resize);
+            if (output_buffer != NULL) {
+                xz_buffer.out_size = resize;
+                xz_buffer.out = output_buffer;
+            } else {
+                LOGE("xz-dec: memory re-allocation failed");
+                output_buffer = xz_buffer.out;
+                decompressed_size = 0;
+                break;
+            }
+        } else {
+            if (xz_return != XZ_STREAM_END) {
+                decompressed_size = 0;
+                LOGE("xz-dec: error code {:d}", (int) xz_return);
+            }
+            break;
+        }
+    }
+    xz_dec_end(xz_state);
+
+    if (std::memcmp(output_buffer, ELFMAG, 4) == 0) {
+        debug_header = reinterpret_cast<decltype(debug_header)>(output_buffer);
+    } else {
+        free(output_buffer);
+        LOGE("xz-dec: {}", (!decompressed_size ? "failed" : "invalid ELF header"));
     }
 }
 
@@ -169,10 +251,10 @@ ElfW(Addr) ElfImg::GnuLookup(std::string_view name, uint32_t hash) const {
 void ElfImg::MayInitLinearMap() const {
     if (symtabs_.empty()) {
         if (symtab_start != nullptr && symstr_offset_for_symtab != 0) {
+            char *strings = (char *) strtab_strings;
             for (ElfW(Off) i = 0; i < symtab_count; i++) {
                 unsigned int st_type = ELF_ST_TYPE(symtab_start[i].st_info);
-                const char *st_name = offsetOf<const char *>(header, symstr_offset_for_symtab +
-                                                                     symtab_start[i].st_name);
+                const char *st_name = strings + symtab_start[i].st_name;
                 if ((st_type == STT_FUNC || st_type == STT_OBJECT) && symtab_start[i].st_size) {
                     symtabs_.emplace(st_name, &symtab_start[i]);
                 }
@@ -221,6 +303,10 @@ ElfImg::~ElfImg() {
     //use mmap
     if (header) {
         munmap(header, size);
+    }
+    if (debug_header) {
+        free(debug_header);
+        debug_header = nullptr;
     }
 }
 
