@@ -56,7 +56,7 @@ copy {
 }
 
 dependencies {
-    api(libs.libxposed.api)
+    api(project(":core:libxposed-api", configuration = "default"))
     implementation(libs.commons.lang3)
     implementation(libs.axml)
     implementation(projects.hiddenapi.bridge)

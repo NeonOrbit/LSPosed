@@ -35,4 +35,5 @@ include(
     ":magisk-loader",
     ":services:manager-service",
     ":services:daemon-service",
+    ":core:libxposed-api"
 )
