@@ -66,13 +66,13 @@ val injectedPackageUid by extra(2000)
 val defaultManagerPackageName by extra("org.lsposed.manager")
 val verCode by extra(commitCount)
 val verName by extra(latestTag)
-val androidTargetSdkVersion by extra(34)
+val androidTargetSdkVersion by extra(35)
 val androidMinSdkVersion by extra(27)
-val androidBuildToolsVersion by extra("34.0.0")
-val androidCompileSdkVersion by extra(34)
-val androidCompileNdkVersion by extra("26.1.10909125")
-val androidSourceCompatibility by extra(JavaVersion.VERSION_17)
-val androidTargetCompatibility by extra(JavaVersion.VERSION_17)
+val androidBuildToolsVersion by extra("35.0.0")
+val androidCompileSdkVersion by extra(35)
+val androidCompileNdkVersion by extra("27.0.12077973")
+val androidSourceCompatibility by extra(JavaVersion.VERSION_21)
+val androidTargetCompatibility by extra(JavaVersion.VERSION_21)
 
 tasks.register("Delete", Delete::class) {
     delete(rootProject.layout.buildDirectory)
@@ -87,7 +87,7 @@ subprojects {
 
             externalNativeBuild {
                 cmake {
-                    version = "3.22.1+"
+                    version = "3.28.1+"
                 }
             }
 

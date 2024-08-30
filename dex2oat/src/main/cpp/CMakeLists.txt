@@ -1,5 +1,5 @@
+cmake_minimum_required(VERSION 3.28)
 project(dex2oat)
-cmake_minimum_required(VERSION 3.4.1)
 
 add_executable(dex2oat dex2oat.c)
 
